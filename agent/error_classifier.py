@@ -1231,7 +1231,11 @@ def classify_api_error(
     # ── 8. Transport / timeout heuristics ───────────────────────────
 
     if error_type in _TRANSPORT_ERROR_TYPES or isinstance(error, (TimeoutError, ConnectionError, OSError)):
-        return _result(FailoverReason.timeout, retryable=True)
+        return _result(
+            FailoverReason.timeout,
+            retryable=True,
+            should_fallback=True,
+        )
 
     # ── 9. Fallback: unknown ────────────────────────────────────────
 
@@ -2048,7 +2052,11 @@ def _classify_by_message(
     # loop rebuilds the client instead of treating the turn as an empty
     # model response.
     if any(p in error_msg for p in _TIMEOUT_MESSAGE_PATTERNS):
-        return result_fn(FailoverReason.timeout, retryable=True)
+        return result_fn(
+            FailoverReason.timeout,
+            retryable=True,
+            should_fallback=True,
+        )
 
     # Connection-establishment / DNS failure message patterns — same shim
     # problem as the timeout patterns above: the wrapping exception type is
@@ -2058,7 +2066,11 @@ def _classify_by_message(
     # client rebuild apply. Never routes to compression: a connection that
     # was never established is not a context-overflow signal.
     if any(p in error_msg for p in _CONNECTION_MESSAGE_PATTERNS):
-        return result_fn(FailoverReason.timeout, retryable=True)
+        return result_fn(
+            FailoverReason.timeout,
+            retryable=True,
+            should_fallback=True,
+        )
 
     return None
 

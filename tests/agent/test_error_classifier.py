@@ -459,6 +459,16 @@ class TestClassifyApiError:
         assert result.reason == FailoverReason.timeout
         assert result.retryable is True
 
+    def test_timeout_is_retryable_and_requests_provider_fallback(self):
+        """A stale non-streaming provider call must hand off to the next
+        provider instead of exhausting the cron turn on the same backend."""
+        result = classify_api_error(
+            TimeoutError("Non-streaming API call timed out after 180s with no response")
+        )
+        assert result.reason == FailoverReason.timeout
+        assert result.retryable is True
+        assert result.should_fallback is True
+
     def test_400_bad_request_still_non_retryable_format_error(self):
         """Guard the boundary: a genuine 400 Bad Request must remain a
         non-retryable format_error and must not be swept up by the 408 branch."""
