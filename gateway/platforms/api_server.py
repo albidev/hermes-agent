@@ -13,10 +13,11 @@ import hashlib
 import hmac
 import itertools
 import json
+import logging
+import math
 from contextlib import contextmanager, nullcontext, suppress
 from contextvars import ContextVar
 from functools import wraps
-import logging
 import os
 import re
 import sqlite3
@@ -229,6 +230,17 @@ def _sse_frame(data: Any, *, event: str = None, ensure_ascii: bool = True) -> by
 
 _TRUE_REQUEST_BOOL_STRINGS = frozenset({"1", "true", "yes", "on"})
 _FALSE_REQUEST_BOOL_STRINGS = frozenset({"0", "false", "no", "off"})
+
+
+def _finite_float(value: Any) -> Optional[float]:
+    """``value`` as a finite float, or None (bools rejected as non-numeric)."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
 
 
 def _coerce_request_bool(value: Any, default: bool = False) -> bool:
@@ -1532,6 +1544,7 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
             ("POST", "/api/sessions/{session_id}/chat", self._handle_session_chat),
             ("POST", "/api/sessions/{session_id}/chat/stream", self._handle_session_chat_stream),
             ("POST", "/api/sessions/{session_id}/model", self._handle_session_model_lock),
+            ("POST", "/api/sessions/{session_id}/idle", self._handle_session_idle),
             ("POST", "/v1/chat/completions", self._handle_chat_completions),
             ("POST", "/v1/responses", self._handle_responses),
             ("GET", "/v1/responses/{response_id}", self._handle_get_response),
@@ -3260,6 +3273,56 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
             model_lock="accepted")
         return web.json_response(
             {"object": "hermes.session.model_lock", "session_id": session_id, "runtime": runtime})
+
+    @_require_auth
+    async def _handle_session_idle(self, request: "web.Request") -> "web.Response":
+        """POST /api/sessions/{session_id}/idle — signal a live -> idle transition.
+
+        Non-destructive: emits the ``session:idle`` hook once per transition and never resets,
+        finalizes, or otherwise mutates the session. The body may carry ``idle_seconds`` and
+        ``threshold`` (both optional floats); the gateway latches the transition so repeated
+        polling ticks for the same idle episode return ``emitted: false``.
+        """
+        session_id = request.match_info["session_id"]
+        _, err = await self._get_existing_session_or_404(session_id)
+        if err:
+            return err
+        body, err = await self._read_json_body(request)
+        if err:
+            return err
+        idle_seconds = _finite_float(body.get("idle_seconds"))
+        threshold = _finite_float(body.get("threshold"))
+
+        runner = self.gateway_runner or request.app.get("gateway_runner")
+        signal = getattr(runner, "_signal_session_idle", None) if runner is not None else None
+        if signal is None:
+            return _error_response(
+                "Session idle hook is unavailable (no gateway runner)", 503,
+                code="session_idle_unavailable")
+
+        session_key = ""
+        platform = ""
+        store = getattr(runner, "session_store", None)
+        if store is not None:
+            entry = getattr(store, "lookup_by_session_id", lambda _sid: None)(session_id)
+            if entry is not None:
+                session_key = getattr(entry, "session_key", "") or ""
+                entry_platform = getattr(entry, "platform", None)
+                platform = entry_platform.value if getattr(entry_platform, "value", None) else ""
+
+        outcome = await signal(
+            session_id=session_id, session_key=session_key,
+            idle_seconds=idle_seconds, threshold=threshold,
+            platform=platform, source="api_server",
+        )
+        return web.json_response({
+            "object": "hermes.session.idle",
+            "session_id": session_id,
+            "session_key": session_key,
+            "emitted": outcome["emitted"],
+            "reason": outcome["reason"],
+            "generation": outcome["generation"],
+        })
 
     # -- Cron jobs API ----------------------------------------------------------------
 

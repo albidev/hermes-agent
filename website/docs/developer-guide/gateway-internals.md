@@ -212,6 +212,7 @@ Gateway hooks are Python modules that respond to lifecycle events:
 | `session:start` | New conversation session begins |
 | `session:end` | Session completes or times out |
 | `session:reset` | User resets session with `/new` |
+| `session:idle` | Existing session crosses its idle threshold (signaled via `POST /api/sessions/{session_id}/idle`); once per live → idle transition |
 | `agent:start` | Agent begins processing a message |
 | `agent:step` | Agent completes one tool-calling iteration |
 | `agent:end` | Agent finishes and returns response |
