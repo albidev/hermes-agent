@@ -541,6 +541,8 @@ class GatewayConfig:
     """Main gateway configuration: platform connections, session policies, delivery settings."""
     platforms: Dict[Platform, PlatformConfig] = field(default_factory=dict)
     default_reset_policy: SessionResetPolicy = field(default_factory=SessionResetPolicy)
+    # Notify-only idle lifecycle events; independent from automatic session reset policy.
+    session_idle_event_seconds: int = 300
     reset_by_type: Dict[str, SessionResetPolicy] = field(default_factory=dict)
     reset_by_platform: Dict[Platform, SessionResetPolicy] = field(default_factory=dict)
     reset_triggers: List[str] = field(default_factory=lambda: ["/new", "/reset"])
@@ -596,6 +598,7 @@ class GatewayConfig:
         "room_link_url", "systemd_watchdog_seconds", "loop_watchdog",
         "loop_watchdog_probe_interval_s", "loop_watchdog_probe_timeout_s",
         "loop_watchdog_max_strikes", "unauthorized_dm_behavior",
+        "session_idle_event_seconds",
     )
 
     def __post_init__(self) -> None:
@@ -729,6 +732,9 @@ class GatewayConfig:
         max_concurrent_sessions = _coerce_optional_positive_int(
             pick("max_concurrent_sessions"), key_label("max_concurrent_sessions")
         )
+        session_idle_event_seconds = _coerce_int(pick("session_idle_event_seconds"), 300)
+        if not 30 <= session_idle_event_seconds <= 7 * 24 * 60 * 60:
+            session_idle_event_seconds = 300
 
         try:
             session_store_max_age_days = max(int(data.get("session_store_max_age_days", 90)), 0)
@@ -742,6 +748,7 @@ class GatewayConfig:
             default_reset_policy=SessionResetPolicy.from_dict(data["default_reset_policy"])
             if "default_reset_policy" in data
             else SessionResetPolicy(),
+            session_idle_event_seconds=session_idle_event_seconds,
             reset_by_type={
                 type_name: SessionResetPolicy.from_dict(policy_data)
                 for type_name, policy_data in _coerce_dict(data.get("reset_by_type", {})).items()

@@ -6,6 +6,7 @@ clears the latch so a later idle episode emits again.
 """
 
 from types import SimpleNamespace
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -58,8 +59,6 @@ async def test_reactivation_permits_later_idle_event():
     outcome = await runner._signal_session_idle(session_id="s1", session_key="k1")
     assert outcome["emitted"] is True
     assert runner.hooks.emit.await_count == 2
-
-
 @pytest.mark.asyncio
 async def test_idle_signal_does_not_reset_session():
     runner = _make_runner()
@@ -67,6 +66,86 @@ async def test_idle_signal_does_not_reset_session():
     # The mixin only fires the hook; it never touches reset/finalize paths.
     assert runner.hooks.emit.await_count == 1
     assert not hasattr(runner, "_sessions") or runner._sessions == {}
+
+
+def _idle_entry(*, key="k1", session_id="s1", updated_at=1000.0, active_turn_token=None):
+    return SimpleNamespace(
+        session_key=key,
+        session_id=session_id,
+        updated_at=datetime.fromtimestamp(updated_at),
+        active_turn_token=active_turn_token,
+        platform=Platform.TELEGRAM,
+    )
+
+
+def test_internal_idle_observer_ignores_session_already_idle_at_startup():
+    runner = _make_runner()
+    entry = _idle_entry(updated_at=1000.0)
+    assert runner._observe_session_idle_entries([entry], now=1400.0, threshold_seconds=300) == []
+
+
+def test_internal_idle_observer_emits_after_live_then_idle_and_rearms():
+    runner = _make_runner()
+    entry = _idle_entry(updated_at=1000.0)
+    runner._observe_session_idle_entries([entry], now=1000.0, threshold_seconds=300)
+    first = runner._observe_session_idle_entries([entry], now=1400.0, threshold_seconds=300)
+    assert len(first) == 1
+    assert first[0]["session_id"] == "s1"
+    runner._mark_session_live("k1")
+    second = runner._observe_session_idle_entries([entry], now=1800.0, threshold_seconds=300)
+    assert len(second) == 1
+    assert second[0]["session_id"] == "s1"
+
+
+def test_internal_idle_observer_excludes_active_turns():
+    runner = _make_runner()
+    entry = _idle_entry(updated_at=1000.0, active_turn_token="busy")
+    runner._mark_session_live("k1")
+    assert runner._observe_session_idle_entries([entry], now=1400.0, threshold_seconds=300) == []
+
+
+@pytest.mark.asyncio
+async def test_internal_idle_scan_emits_hook_for_transition():
+    runner = _make_runner()
+    entry = _idle_entry(updated_at=1000.0)
+    assert await runner._scan_session_idle(entries=[entry], now=1000.0, threshold_seconds=300) == {
+        "checked": 1, "emitted": 0,
+    }
+    result = await runner._scan_session_idle(entries=[entry], now=1400.0, threshold_seconds=300)
+    assert result["emitted"] == 1
+    assert runner.hooks.emit.await_count == 1
+    assert runner.hooks.emit.await_args.args[0] == "session:idle"
+
+
+@pytest.mark.asyncio
+async def test_internal_idle_scan_does_not_emit_for_first_idle_observation():
+    runner = _make_runner()
+    entry = _idle_entry(updated_at=1000.0)
+    result = await runner._scan_session_idle(entries=[entry], now=1400.0, threshold_seconds=300)
+    assert result["emitted"] == 0
+    assert runner.hooks.emit.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_internal_idle_scan_skips_active_turn():
+    runner = _make_runner()
+    entry = _idle_entry(updated_at=1000.0, active_turn_token="busy")
+    result = await runner._scan_session_idle(entries=[entry], now=1400.0, threshold_seconds=300)
+    assert result["emitted"] == 0
+    assert runner.hooks.emit.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_internal_idle_scan_rearms_after_activity():
+    runner = _make_runner()
+    entry = _idle_entry(updated_at=1000.0)
+    await runner._scan_session_idle(entries=[entry], now=1000.0, threshold_seconds=300)
+    first = await runner._scan_session_idle(entries=[entry], now=1400.0, threshold_seconds=300)
+    runner._mark_session_live("k1")
+    second = await runner._scan_session_idle(entries=[entry], now=1800.0, threshold_seconds=300)
+    assert first["emitted"] == 1
+    assert second["emitted"] == 1
+    assert runner.hooks.emit.await_count == 2
 
 
 @pytest.mark.asyncio

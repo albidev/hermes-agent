@@ -4377,6 +4377,25 @@ def _housekeeping_chore(label: str, fn, *args, **kwargs) -> None:
         logger.debug("%s error: %s", label, exc)
 
 
+def _housekeeping_session_idle(runner, loop) -> None:
+    """Ask the gateway-owned idle tracker to emit notify-only transitions."""
+    if runner is None or loop is None:
+        return
+    scan = getattr(runner, "_scan_session_idle", None)
+    if not callable(scan):
+        return
+    future = safe_schedule_threadsafe(
+        scan(), loop, logger=logger,
+        log_message="Session idle scan scheduling error")
+    if future is not None:
+        result = future.result(timeout=10)
+        if result.get("emitted"):
+            logger.info(
+                "Session idle scan emitted %d transition(s) across %d session(s)",
+                result["emitted"], result["checked"],
+            )
+
+
 def _housekeeping_channel_directory(adapters, loop) -> None:
     from gateway.channel_directory import build_channel_directory
     if loop is not None:
@@ -4520,6 +4539,8 @@ def _start_gateway_housekeeping(
         # whichever gateway is live; drained here (not the scheduler tick) so external providers get it too.
         chores.append((1, "Cron durable delivery queue drain",
                        lambda: _drain_restart_safe_cron_deliveries(adapters, loop, runner)))
+    if runner is not None:
+        chores.append((1, "Session idle event scan", lambda: _housekeeping_session_idle(runner, loop)))
     chores += [
         (5, "Channel directory refresh", lambda: adapters and _housekeeping_channel_directory(adapters, loop)),
         (60, "Media cache cleanup", _housekeeping_media_caches),

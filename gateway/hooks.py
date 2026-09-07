@@ -2,14 +2,16 @@
 
 Hooks live in ~/.hermes/hooks/<name>/ with HOOK.yaml (name, description, events) and
 handler.py (``def handle(event_type, context)``, sync or async); errors never block
-the pipeline.  Events: gateway:startup, session:start/end/reset/idle, agent:start,
-agent:step (each tool-loop turn), agent:end, command:* (wildcard).  agent:* context:
+the pipeline. Events: gateway:startup, session:start/end/reset/idle, agent:start,
+agent:step (each tool-loop turn), agent:end, command:* (wildcard). agent:* context:
 platform, user_id, chat_id, thread_id ("" outside a thread), chat_type
 ("dm"|"group"|"forum"|""), session_id, message (500 chars); agent:end adds response,
 model, provider.  Forum follow-ups pass ``message_thread_id=int(thread_id)``.
-``session:idle`` fires once per live -> idle transition (signaled via
-``POST /api/sessions/{session_id}/idle``) and carries session_id, session_key,
-idle_seconds, threshold, platform, source, and a stable ``generation`` identity.
+``session:idle`` fires once per live -> idle transition. The gateway's own
+activity clock emits it during housekeeping; an authenticated
+``POST /api/sessions/{session_id}/idle`` remains available for external hosts and
+carries session_id, session_key, idle_seconds, threshold, platform, source, and
+stable generation identity.
 """
 
 import asyncio
