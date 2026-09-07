@@ -1,4 +1,5 @@
 import atexit
+import asyncio
 import concurrent.futures
 import contextlib
 import contextvars
@@ -95,11 +96,71 @@ _cfg_lock = threading.Lock()
 # compare/check/write transaction needs its own lock, not the unrelated config cache lock.
 _profile_ui_meta_lock = threading.Lock()
 _sessions_lock = threading.RLock()  # reentrant: _close_session_by_id may run under callers that already hold it
+_session_idle_coordinator = None
+_session_idle_monitor_thread = None
+_session_idle_monitor_stop = threading.Event()
+_session_idle_monitor_lock = threading.Lock()
 _prompt_lock = threading.Lock()
 _cfg_cache: dict | None = None
 _cfg_mtime: float | None = None
 _cfg_path = None
 _session_resume_lock = threading.Lock()
+
+
+def _session_idle_threshold_seconds() -> float:
+    """Read the shared top-level idle threshold without coupling TUI to gateway config classes."""
+    try:
+        from hermes_cli.config import load_config_readonly
+        value = load_config_readonly().get("session_idle_event_seconds", 300)
+        value = float(value)
+        return value if value >= 30 else 300.0
+    except Exception:
+        return 300.0
+
+
+def _session_idle_monitor_loop() -> None:
+    while not _session_idle_monitor_stop.wait(60.0):
+        try:
+            with _sessions_lock:
+                snapshot = {
+                    sid: {
+                        "agent": session.get("agent"),
+                        "session_key": session.get("session_key"),
+                        "last_active": session.get("last_active"),
+                        "running": session.get("running", False),
+                    }
+                    for sid, session in _sessions.items()
+                }
+            coordinator = _session_idle_coordinator
+            if coordinator is None:
+                continue
+            result = asyncio.run(
+                coordinator.scan_sessions(
+                    snapshot, threshold_seconds=_session_idle_threshold_seconds(),
+                )
+            )
+            if result.get("emitted"):
+                logger.info("TUI session idle scan emitted %s transition(s)", result["emitted"])
+        except Exception:
+            logger.warning("TUI session idle scan failed", exc_info=True)
+
+
+def _ensure_session_idle_monitor() -> None:
+    """Start the shared idle coordinator once per TUI/dashboard process."""
+    global _session_idle_coordinator, _session_idle_monitor_thread
+    with _session_idle_monitor_lock:
+        if _session_idle_monitor_thread is not None and _session_idle_monitor_thread.is_alive():
+            return
+        from tui_gateway.session_idle import TuiSessionIdleCoordinator
+        _session_idle_coordinator = TuiSessionIdleCoordinator()
+        _session_idle_monitor_stop.clear()
+        _session_idle_monitor_thread = threading.Thread(
+            target=_session_idle_monitor_loop,
+            name="tui-session-idle-monitor",
+            daemon=True,
+        )
+        _session_idle_monitor_thread.start()
+
 _SLASH_WORKER_TIMEOUT_S = max(5.0, env_float("HERMES_TUI_SLASH_TIMEOUT_S", 45.0))
 
 def _ws_orphan_setting(env_var: str, cfg_key: str, default: float) -> float:

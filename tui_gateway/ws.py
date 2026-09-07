@@ -259,6 +259,7 @@ async def handle_ws(ws: Any, *, auth_identity: dict | None = None, subprotocol: 
     try:
         await (ws.accept(subprotocol=subprotocol) if subprotocol else ws.accept())
         disconnect_reason = "connected"
+        server._ensure_session_idle_monitor()
         # Mark the client attached before the (possibly slow) ready/skin setup so scale-to-zero sees it.
         _note_dashboard_client_activity(force=True)
         _disable_nagle(ws)

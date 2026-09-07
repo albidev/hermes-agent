@@ -240,6 +240,7 @@ def _write_or_exit(payload: dict, reason: str) -> None:
 
 def main():
     _install_sidecar_publisher()
+    server._ensure_session_idle_monitor()
 
     # The heartbeat row lets the orphan sweep tell "live but idle" from "truly orphaned",
     # so it must start BEFORE the sweep.
