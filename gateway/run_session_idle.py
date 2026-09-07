@@ -13,10 +13,15 @@ so consumers can deduplicate across ticks.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Optional
+
+from hermes_constants import get_hermes_home
+from utils import atomic_json_write
 
 logger = logging.getLogger("gateway.run")
 
@@ -24,13 +29,86 @@ logger = logging.getLogger("gateway.run")
 class GatewaySessionIdleMixin:
     """Live -> idle transition hook with a per-session latch (notify-only, non-destructive)."""
 
-    def _session_idle_latch_map(self) -> Dict[str, int]:
-        """Per-session idle latch: latch key -> generation of the current idle episode."""
+    _SESSION_IDLE_STATE_VERSION = 1
+    _SESSION_IDLE_STATE_FILENAME = "gateway-session-idle.json"
+
+    def _session_idle_state_file(self) -> Path:
+        """Return the profile-scoped durable live/idle transition ledger."""
+        override = self.__dict__.get("_session_idle_state_path")
+        if override:
+            return Path(override)
+        return get_hermes_home() / self._SESSION_IDLE_STATE_FILENAME
+
+    def _load_session_idle_state(self) -> None:
+        """Hydrate latches once so a gateway restart cannot erase a live episode."""
+        if self.__dict__.get("_session_idle_state_loaded"):
+            return
+        self.__dict__["_session_idle_state_loaded"] = True
+        path = self._session_idle_state_file()
+        try:
+            data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+            if not isinstance(data, dict) or data.get("version") != self._SESSION_IDLE_STATE_VERSION:
+                return
+            latch = self._session_idle_latch_map_raw()
+            live_seen = self._session_idle_live_seen_raw()
+            for session_key, record in (data.get("sessions") or {}).items():
+                if not isinstance(session_key, str) or not isinstance(record, dict):
+                    continue
+                state = record.get("state")
+                if state == "live":
+                    live_seen.add(session_key)
+                elif state == "idle":
+                    latch[session_key] = int(record.get("generation") or 0)
+            self.__dict__["_session_idle_generation"] = max(
+                int(data.get("generation") or 0),
+                max(latch.values(), default=0),
+            )
+        except (OSError, ValueError, TypeError) as exc:
+            logger.warning("session idle state restore failed: %s", exc)
+
+    def _persist_session_idle_state(self) -> None:
+        """Atomically persist live/idle transition state; never fail the gateway turn."""
+        latch = self._session_idle_latch_map_raw()
+        live_seen = self._session_idle_live_seen_raw()
+        sessions = {
+            key: {"state": "live"}
+            for key in live_seen
+            if key not in latch
+        }
+        sessions.update({
+            key: {"state": "idle", "generation": int(generation)}
+            for key, generation in latch.items()
+        })
+        try:
+            atomic_json_write(
+                self._session_idle_state_file(),
+                {
+                    "version": self._SESSION_IDLE_STATE_VERSION,
+                    "generation": int(self.__dict__.get("_session_idle_generation", 0)),
+                    "sessions": sessions,
+                },
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            logger.warning("session idle state persist failed: %s", exc)
+
+    def _session_idle_latch_map_raw(self) -> Dict[str, int]:
         latch = self.__dict__.get("_session_idle_latch")
         if latch is None:
             latch = {}
             self.__dict__["_session_idle_latch"] = latch
         return latch
+
+    def _session_idle_live_seen_raw(self) -> set[str]:
+        live_seen = self.__dict__.get("_session_idle_live_keys")
+        if live_seen is None:
+            live_seen = set()
+            self.__dict__["_session_idle_live_keys"] = live_seen
+        return live_seen
+
+    def _session_idle_latch_map(self) -> Dict[str, int]:
+        """Per-session idle latch: latch key -> generation of the current idle episode."""
+        self._load_session_idle_state()
+        return self._session_idle_latch_map_raw()
 
     def _next_session_idle_generation(self) -> int:
         """Monotonic transition identity; never reset (stale ticks must not re-emit)."""
@@ -39,24 +117,22 @@ class GatewaySessionIdleMixin:
         return generation
 
     def _mark_session_live(self, session_key: str) -> None:
-        """Clear the idle latch for ``session_key``: new activity re-arms a later transition."""
+        """Clear the idle latch for ``session_key`` and persist the re-armed episode."""
         if not session_key:
             return
-        self._session_idle_live_seen().add(session_key)
-        self._session_idle_latch_map().pop(session_key, None)
+        self._load_session_idle_state()
+        live_seen = self._session_idle_live_seen_raw()
+        latch = self._session_idle_latch_map_raw()
+        changed = session_key not in live_seen or session_key in latch
+        live_seen.add(session_key)
+        latch.pop(session_key, None)
+        if changed:
+            self._persist_session_idle_state()
 
     def _session_idle_live_seen(self) -> set[str]:
-        """Session keys observed live in this gateway process.
-
-        An existing session that is already old when the gateway starts must not
-        emit a synthetic idle transition. A real inbound turn marks it live and
-        re-arms the next transition.
-        """
-        live_seen = self.__dict__.get("_session_idle_live_keys")
-        if live_seen is None:
-            live_seen = set()
-            self.__dict__["_session_idle_live_keys"] = live_seen
-        return live_seen
+        """Session keys observed live, rehydrated across gateway restarts."""
+        self._load_session_idle_state()
+        return self._session_idle_live_seen_raw()
 
     @staticmethod
     def _session_idle_timestamp(entry: Any) -> Optional[float]:
@@ -169,4 +245,5 @@ class GatewaySessionIdleMixin:
             "generation": generation,
         }
         await self.hooks.emit("session:idle", payload)
+        self._persist_session_idle_state()
         return {"emitted": True, "reason": "transition", "generation": generation}

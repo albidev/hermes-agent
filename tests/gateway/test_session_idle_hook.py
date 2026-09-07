@@ -5,6 +5,7 @@ already idle, and never resets/closes the session. Reactivation (new inbound act
 clears the latch so a later idle episode emits again.
 """
 
+from pathlib import Path
 from types import SimpleNamespace
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
@@ -19,9 +20,11 @@ from gateway.run import GatewayRunner
 from hermes_state import SessionDB
 
 
-def _make_runner():
+def _make_runner(state_path: Path | None = None):
     runner = object.__new__(GatewayRunner)
     runner.hooks = SimpleNamespace(emit=AsyncMock())
+    if state_path is not None:
+        runner._session_idle_state_path = state_path
     return runner
 
 
@@ -82,6 +85,43 @@ def test_internal_idle_observer_ignores_session_already_idle_at_startup():
     runner = _make_runner()
     entry = _idle_entry(updated_at=1000.0)
     assert runner._observe_session_idle_entries([entry], now=1400.0, threshold_seconds=300) == []
+
+
+def test_persisted_live_session_emits_after_gateway_restart(tmp_path):
+    state_path = tmp_path / "session-idle.json"
+    first_process = _make_runner(state_path)
+    first_process._mark_session_live("k1")
+
+    restarted_process = _make_runner(state_path)
+    entry = _idle_entry(updated_at=1000.0)
+    transitions = restarted_process._observe_session_idle_entries(
+        [entry], now=1400.0, threshold_seconds=300,
+    )
+
+    assert len(transitions) == 1
+    assert transitions[0]["session_id"] == "s1"
+
+
+@pytest.mark.asyncio
+async def test_persisted_idle_latch_deduplicates_across_restart_and_rearms(tmp_path):
+    state_path = tmp_path / "session-idle.json"
+    first_process = _make_runner(state_path)
+    first_process._mark_session_live("k1")
+    first = await first_process._signal_session_idle(session_id="s1", session_key="k1")
+    assert first["emitted"] is True
+
+    restarted_process = _make_runner(state_path)
+    entry = _idle_entry(updated_at=1000.0)
+    suppressed = await restarted_process._scan_session_idle(
+        entries=[entry], now=1400.0, threshold_seconds=300,
+    )
+    assert suppressed["emitted"] == 0
+
+    restarted_process._mark_session_live("k1")
+    rearmed = await restarted_process._scan_session_idle(
+        entries=[entry], now=1800.0, threshold_seconds=300,
+    )
+    assert rearmed["emitted"] == 1
 
 
 def test_internal_idle_observer_emits_after_live_then_idle_and_rearms():
