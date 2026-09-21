@@ -248,8 +248,12 @@ describe('status-chrome timers under an occluding overlay', () => {
     expect(oneSecondTimers(intervalSpy)).toBeGreaterThan(0)
   })
 
-  it('freezes the FaceTicker verb on compacting and skips verb rotation (#97239)', () => {
+  it('freezes the FaceTicker verb on compacting and skips verb rotation (#97239)', async () => {
     const { output } = mount({ ...busyProps, compacting: true })
+
+    // The frame write drains through a microtask (ink defers onRender); a
+    // mocked Date.now starves nothing but the read must wait one turn.
+    await flush()
 
     expect(output()).toContain('compacting')
     // Glyph still ticks at the kaomoji cadence; the rotating-verb timer does not.
@@ -297,6 +301,7 @@ describe('status-chrome timers under an occluding overlay', () => {
 
     const rule = mount(idleProps)
 
+    await flush()
     expect(rule.output()).toContain('1m 0s')
     expect(rule.output()).toContain('✓ 5s')
 

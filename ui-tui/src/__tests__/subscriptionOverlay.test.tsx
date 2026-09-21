@@ -68,8 +68,10 @@ function mount(
 }
 
 /** Render a SubscriptionOverlay to a string via renderSync + PassThrough. */
-function render(overlay: SubscriptionOverlayState): string {
+async function render(overlay: SubscriptionOverlayState): Promise<string> {
   const mounted = mount(overlay)
+  // ink defers the first frame write to a microtask; read after it drains.
+  await new Promise(resolve => setTimeout(resolve, 20))
   const output = mounted.output()
   mounted.cleanup()
 
@@ -139,8 +141,8 @@ const overlay = (s: SubscriptionStateResponse): SubscriptionOverlayState => ({ c
 // Overview: the entry screen across every account state (plan + usage + the
 // actions that enter the in-terminal change flow).
 describe('SubscriptionOverlay — overview', () => {
-  it('free: upsell + "Start a subscription", no tier list, no "credits"', () => {
-    const out = render(overlay(state({ current: null, usage: { available: true, status: 'free', plan_name: null } })))
+  it('free: upsell + "Start a subscription", no tier list, no "credits"', async () => {
+    const out = await render(overlay(state({ current: null, usage: { available: true, status: 'free', plan_name: null } })))
 
     expect(out).toContain('Plan: Free · free models only')
     expect(out).toContain('Paid models need a subscription')
@@ -149,8 +151,8 @@ describe('SubscriptionOverlay — overview', () => {
     expect(out.toLowerCase()).not.toContain('credits')
   })
 
-  it('free with catalog: plans render inline; the generic portal row disappears', () => {
-    const out = render(overlay(freeWithCatalog()))
+  it('free with catalog: plans render inline; the generic portal row disappears', async () => {
+    const out = await render(overlay(freeWithCatalog()))
 
     expect(out).toContain('Plus · $20/mo · $1,000 credits/mo')
     expect(out).toContain('Ultra · $40/mo · $3,000 credits/mo')
@@ -183,8 +185,8 @@ describe('SubscriptionOverlay — overview', () => {
     expect(sys).not.toHaveBeenCalled()
   })
 
-  it('subscriber: status line + plan bar + top-up bar, no "credits"', () => {
-    const out = render(
+  it('subscriber: status line + plan bar + top-up bar, no "credits"', async () => {
+    const out = await render(
       overlay(
         state({
           current: {
@@ -232,8 +234,8 @@ describe('SubscriptionOverlay — overview', () => {
     expect(out.toLowerCase()).not.toContain('credits')
   })
 
-  it('low balance: shows alert nudge', () => {
-    const out = render(
+  it('low balance: shows alert nudge', async () => {
+    const out = await render(
       overlay(
         state({
           current: {
@@ -267,8 +269,8 @@ describe('SubscriptionOverlay — overview', () => {
     expect(out).toContain('Low balance')
   })
 
-  it('not-admin: shows read-only note', () => {
-    const out = render(
+  it('not-admin: shows read-only note', async () => {
+    const out = await render(
       overlay(
         state({
           is_admin: false,
@@ -292,8 +294,8 @@ describe('SubscriptionOverlay — overview', () => {
     expect(out).toContain('Manage on portal')
   })
 
-  it('downgrade-pending: leads with a Pro ──▶ Free banner + status echo', () => {
-    const out = render(
+  it('downgrade-pending: leads with a Pro ──▶ Free banner + status echo', async () => {
+    const out = await render(
       overlay(
         state({
           current: {
@@ -319,8 +321,8 @@ describe('SubscriptionOverlay — overview', () => {
     expect(out).toContain('Plan: Pro → Free')
   })
 
-  it('team context: redirects to /topup, no tier picker', () => {
-    const out = render(overlay(state({ context: 'team', current: null })))
+  it('team context: redirects to /topup, no tier picker', async () => {
+    const out = await render(overlay(state({ context: 'team', current: null })))
 
     expect(out).toContain('shared balance')
     expect(out).toContain('/topup')
@@ -361,15 +363,15 @@ const freeWithCatalog = (): SubscriptionStateResponse =>
   })
 
 describe('SubscriptionOverlay — overview actions', () => {
-  it('admin subscriber: offers Change plan + Cancel subscription', () => {
-    const out = render(overlay(subscriber()))
+  it('admin subscriber: offers Change plan + Cancel subscription', async () => {
+    const out = await render(overlay(subscriber()))
 
     expect(out).toContain('Change plan')
     expect(out).toContain('Cancel subscription')
   })
 
-  it('pending change: offers undo instead of cancel', () => {
-    const out = render(
+  it('pending change: offers undo instead of cancel', async () => {
+    const out = await render(
       overlay(
         subscriber({
           current: {
@@ -395,8 +397,8 @@ describe('SubscriptionOverlay — overview actions', () => {
 })
 
 describe('SubscriptionOverlay — step-up', () => {
-  it('prompts to allow Remote Spending (never leaks the raw scope)', () => {
-    const out = render(at('stepup', subscriber(), { stepUpRetry: { kind: 'preview', tierId: 'ultra' } }))
+  it('prompts to allow Remote Spending (never leaks the raw scope)', async () => {
+    const out = await render(at('stepup', subscriber(), { stepUpRetry: { kind: 'preview', tierId: 'ultra' } }))
 
     expect(out).toContain('Remote Spending')
     expect(out).toContain('Allow Remote Spending')
@@ -405,8 +407,8 @@ describe('SubscriptionOverlay — step-up', () => {
 })
 
 describe('SubscriptionOverlay — picker', () => {
-  it('lists other paid tiers with direction hints; hides current + free', () => {
-    const out = render(at('picker', subscriber()))
+  it('lists other paid tiers with direction hints; hides current + free', async () => {
+    const out = await render(at('picker', subscriber()))
 
     expect(out).toContain('Ultra')
     expect(out).toContain('$40/mo')
@@ -417,8 +419,8 @@ describe('SubscriptionOverlay — picker', () => {
 })
 
 describe('SubscriptionOverlay — confirm', () => {
-  it('charge_now: shows the prorated charge + upgrade copy', () => {
-    const out = render(
+  it('charge_now: shows the prorated charge + upgrade copy', async () => {
+    const out = await render(
       at('confirm', subscriber(), {
         pending: {
           kind: 'upgrade',
@@ -438,8 +440,8 @@ describe('SubscriptionOverlay — confirm', () => {
     expect(out).toContain('Upgrade to Ultra')
   })
 
-  it('scheduled: shows effective date + no charge now', () => {
-    const out = render(
+  it('scheduled: shows effective date + no charge now', async () => {
+    const out = await render(
       at('confirm', subscriber(), {
         pending: {
           kind: 'tier_change',
@@ -460,8 +462,8 @@ describe('SubscriptionOverlay — confirm', () => {
     expect(out).toContain('No charge now')
   })
 
-  it('cancellation: shows cancel-at-period-end copy', () => {
-    const out = render(
+  it('cancellation: shows cancel-at-period-end copy', async () => {
+    const out = await render(
       at('confirm', subscriber(), { pending: { kind: 'cancellation', targetTierId: null, preview: null } })
     )
 
@@ -469,8 +471,8 @@ describe('SubscriptionOverlay — confirm', () => {
     expect(out).toContain('will not renew')
   })
 
-  it('blocked: shows the reason + Manage on portal', () => {
-    const out = render(
+  it('blocked: shows the reason + Manage on portal', async () => {
+    const out = await render(
       at('confirm', subscriber(), {
         pending: {
           kind: 'tier_change',
@@ -486,16 +488,16 @@ describe('SubscriptionOverlay — confirm', () => {
 })
 
 describe('SubscriptionOverlay — result', () => {
-  it('ok: shows Done + the re-run hint', () => {
-    const out = render(at('result', subscriber(), { result: { ok: true, message: 'Upgraded to Ultra.' } }))
+  it('ok: shows Done + the re-run hint', async () => {
+    const out = await render(at('result', subscriber(), { result: { ok: true, message: 'Upgraded to Ultra.' } }))
 
     expect(out).toContain('Done')
     expect(out).toContain('Upgraded to Ultra.')
     expect(out).toContain('Re-run /subscription')
   })
 
-  it('error with recovery: shows the message + Open the portal', () => {
-    const out = render(
+  it('error with recovery: shows the message + Open the portal', async () => {
+    const out = await render(
       at('result', subscriber(), {
         result: {
           ok: false,
@@ -602,10 +604,12 @@ describe('SubscriptionOverlay — upgrade response mapping', () => {
       const result = { message: 'Upgraded to Ultra.', ok: true, pendingTierId: 'ultra' }
       const mounted = mount(at('result', subscriber(), { ctx: { ...ctx, refreshState }, result }))
 
+      await vi.advanceTimersByTimeAsync(20)  // drain ink's deferred first frame
       expect(mounted.output()).toContain('Applying…')
       await vi.advanceTimersByTimeAsync(2000)
       mounted.rerender()
       expect(refreshState).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(20)  // drain the rerendered frame
       expect(mounted.output()).toContain('Done')
       expect(mounted.output()).toContain('Upgraded to Ultra.')
       mounted.cleanup()
@@ -615,16 +619,19 @@ describe('SubscriptionOverlay — upgrade response mapping', () => {
   })
 
   it('keeps a successful upgrade soft-pending after the bounded confirmation window', async () => {
+    // Fake timers BEFORE mount: the effect's setTimeout(tick, 2000) must be a
+    // fake timer or advanceTimersByTimeAsync never reaches it (a real timer
+    // registered before useFakeTimers() stays real and never advances).
     vi.useFakeTimers()
-
     try {
       const refreshState = vi.fn(() => Promise.resolve(subscriber()))
       const result = { message: 'Upgraded to Ultra.', ok: true, pendingTierId: 'ultra' }
       const mounted = mount(at('result', subscriber(), { ctx: { ...ctx, refreshState }, result }))
-
       await vi.advanceTimersByTimeAsync(30_000)
-      mounted.rerender()
       expect(refreshState).toHaveBeenCalledTimes(15)
+      // Timed-out state rendered: drain the frame with a real clock tick.
+      vi.useRealTimers()
+      await new Promise(resolve => setTimeout(resolve, 20))
       expect(mounted.output()).toContain('Still applying')
       expect(mounted.output()).toContain('refresh in a moment')
       expect(mounted.output()).not.toContain('Could not complete')
