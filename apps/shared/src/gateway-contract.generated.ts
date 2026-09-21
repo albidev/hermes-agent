@@ -3894,6 +3894,8 @@ export interface NoticePayload {
 /** ``prompt_turn._invoke_agent._stream`` (message.delta: ``text`` + optional ``rendered``), ``agent_callbacks._agent_cbs`` (reasoning.delta / thinking.delta), ``tool_progress._progress_reasoning`` (reasoning.available). ``verbose`` rides only when the session's verbose reasoning mode is on. */
 export interface StreamDeltaPayload {
   text: string
+  turn_id?: string | null
+  message_id?: string | null
   rendered?: string | null
   verbose?: boolean | null
 }
@@ -3901,10 +3903,14 @@ export interface StreamDeltaPayload {
 export interface MessageInterimPayload {
   text: string
   already_streamed: boolean
+  turn_id?: string | null
+  message_id?: string | null
 }
 /** ``prompt_turn._complete_turn_payload`` / ``session_auto_continue._emit_terminal_turn_error`` / ``agent_callbacks._mirror_subagent_to_child`` (child watch mirror: ``text`` only) / ``compute_host_bridge`` (``text`` + ``status``). */
 export interface MessageCompletePayload {
   text?: string | unknown
+  turn_id?: string | null
+  message_id?: string | null
   usage?: Usage | null
   status?: TurnStatus | null
   reasoning?: string | null

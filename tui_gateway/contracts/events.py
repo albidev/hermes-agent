@@ -113,6 +113,8 @@ class StreamDeltaPayload(Payload):
     (reasoning.available). ``verbose`` rides only when the session's verbose reasoning mode is on."""
 
     text: str
+    turn_id: str | None = None
+    message_id: str | None = None
     rendered: str | None = None
     verbose: bool | None = None
 
@@ -128,6 +130,8 @@ class MessageInterimPayload(Payload):
 
     text: str
     already_streamed: bool
+    turn_id: str | None = None
+    message_id: str | None = None
 
 
 event("message.interim", MessageInterimPayload,
@@ -173,6 +177,8 @@ class MessageCompletePayload(Payload):
     ``compute_host_bridge`` (``text`` + ``status``)."""
 
     text: str | JsonValue = ""
+    turn_id: str | None = None
+    message_id: str | None = None
     usage: Usage | None = None
     status: TurnStatus | None = None
     reasoning: str | None = None

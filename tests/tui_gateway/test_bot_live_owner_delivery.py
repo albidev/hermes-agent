@@ -34,6 +34,8 @@ def test_refused_input_commits_failed_mailbox_receipt(tmp_path):
         "_emit": noop, "bind_transport": noop, "reset_transport": noop,
         "_current_runtime_session_record": contextvars.ContextVar("refused_turn"),
         "_TurnRun": prompt_turn._TurnRun,
+        "LiveMessageIdentity": prompt_turn.LiveMessageIdentity,
+        "uuid": __import__("uuid"),
         "_record_turn_marker": lambda *args, **kwargs: "marker",
         "_prepare_turn_input": lambda *args: None,
         "_finish_turn": noop, "_clear_inflight_turn": noop,

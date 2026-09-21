@@ -10,6 +10,9 @@ post-turn follow-ups (queued prompt, goal continuation, notifications).
 from __future__ import annotations
 
 import dataclasses
+import uuid
+
+from tui_gateway.live_message_identity import LiveMessageIdentity
 
 from .method_ctx import HandlerRegistry, bind_module
 
@@ -473,6 +476,7 @@ class _TurnRun:
     one_turn_restore: Any
     terminal_callback: Any
     receipt_committed: bool
+    live_identity: LiveMessageIdentity | None = None
     scopes: _TurnScopes = dataclasses.field(default_factory=_TurnScopes)
     result: Any = None  # read after the finally for leftover /steer
     tts_queue: Any = None
@@ -615,6 +619,7 @@ def _invoke_agent(
     """Wire the streaming callbacks and run the conversation into ``st.result``.
     ``text`` is the turn's raw submit, matched against the row staged by prompt.submit."""
     agent = st.agent
+    current_live_identity = st.live_identity
     # Bot Chat mirrors gateway.stream_consumer: deltas are withheld while the streamed buffer
     # could still resolve to a silence marker ("NO"->"NO_REPLY"), so a bare marker is never
     # shown and then retracted (the client keeps streamed text when message.complete is "").
@@ -632,7 +637,8 @@ def _invoke_agent(
             delta, hold["held"] = hold["held"] + delta, ""
         with session["history_lock"]:
             _append_inflight_delta(session, delta)
-        payload = {"text": delta}
+        payload = (current_live_identity.payload({"text": delta})
+                   if current_live_identity is not None else {"text": delta})
         if streamer and (r := streamer.feed(delta)) is not None:
             payload["rendered"] = r
         if st.tts_queue is not None and isinstance(delta, str):
@@ -644,7 +650,14 @@ def _invoke_agent(
     def _interim_assistant_cb(text: str, *, already_streamed: bool = False) -> None:
         if getattr(agent, "_mute_notification_reply", False):
             return
-        _emit("message.interim", sid, {"text": text, "already_streamed": already_streamed})
+        nonlocal current_live_identity
+        payload = {"text": text, "already_streamed": already_streamed}
+        if current_live_identity is not None:
+            payload = current_live_identity.payload(payload)
+        _emit("message.interim", sid, payload)
+        if current_live_identity is not None:
+            current_live_identity = current_live_identity.next_segment()
+            st.live_identity = current_live_identity
     agent.interim_assistant_callback = (
         _interim_assistant_cb if _load_interim_assistant_messages() else None)
     # A synthesized turn is typed at turn START so a crash persist writes a timeline event,
@@ -765,6 +778,8 @@ def _complete_turn_payload(session: dict, st: _TurnRun, status_note: str | None,
     if _is_bot_mode_session(session):
         raw = _bot_mode_delivery_text(raw, successful=status == "complete")
     payload = {"text": raw, "usage": _get_usage(agent), "status": status}
+    if st.live_identity is not None:
+        payload = st.live_identity.payload(payload)
     if last_reasoning:
         payload["reasoning"] = last_reasoning
     if status_note:
@@ -938,6 +953,7 @@ def _run_prompt_submit(
         muted = diagnostic_turn_muted(display_metadata, "tui", notification_config)
     if muted:
         display_kind = "hidden"
+    live_identity = LiveMessageIdentity(f"{sid}:turn:{uuid.uuid4().hex}")
     # The ONE INFO record proving a prompt was accepted by THIS process; ties ui sid,
     # session_key and the agent's live session_id together.  No prompt content is logged.
     _turn_started_monotonic = time.monotonic()
@@ -962,7 +978,7 @@ def _run_prompt_submit(
         runtime_session_token = _current_runtime_session_record.set(session)
         st = _TurnRun(
             session["agent"], session.pop("one_turn_model_restore", None), terminal_callback,
-            receipt_committed=terminal_callback is None)
+            receipt_committed=terminal_callback is None, live_identity=live_identity)
         st.marker_key = _record_turn_marker(session, text, auto_continue=terminal_callback is None,
             notification_category=(display_metadata or {}).get("notification_category"))
         goal_followup = None

@@ -16,6 +16,7 @@ def _turn(result):
         result=result, agent=SimpleNamespace(_session_title_hint="Bot Chat"), terminal_callback=None,
         receipt_committed=True, receipt_attempted=False, marker_key="", error_retained=False,
         error_detail="", prompt_text="ping",
+        live_identity=None,
     )
 
 

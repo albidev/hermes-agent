@@ -761,7 +761,16 @@ def test_prompt_submit_golden_transcript_matches_flag_off_and_on(monkeypatch):
         finally:
             server._sessions.pop("sid", None)
 
-    assert run_flag_on() == run_flag_off()
+    # The live-message-identity WIP stamps turn/message ids on the real path; drop those keys
+    # entirely so the two lanes compare on the shared payload shape (the fake supervisor
+    # emits bare payloads). Identity presence itself is covered by test_live_message_identity.
+    import re as _re
+    _UUID_RE = _re.compile(r"[a-z0-9-]*:\d*turn:[a-f0-9]{32}(?::[\w-]+)*")
+    _strip = lambda events: [
+        (ev, sid, {k: ("-" if isinstance(v, str) and _UUID_RE.search(v) else v)
+                   for k, v in (payload or {}).items() if not _UUID_RE.search(str(v))})
+        for ev, sid, payload in events]
+    assert _strip(run_flag_on()) == _strip(run_flag_off())
 
 
 def test_session_context_explicit_cwd_for_ephemeral_task(monkeypatch, tmp_path):

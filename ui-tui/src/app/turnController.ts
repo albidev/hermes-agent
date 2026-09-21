@@ -98,6 +98,48 @@ const finalTail = (finalText: string, segments: Msg[]) => {
   return tail
 }
 
+const textsContinue = (existing: string, incoming: string): boolean => {
+  const left = existing.trim()
+  const right = incoming.trim()
+
+  return Boolean(left && right && (left === right || right.startsWith(left) || left.startsWith(right)))
+}
+
+const lastAssistantNarrationIndex = (segments: Msg[]): number => {
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    const msg = segments[index]!
+
+    if (msg.role === 'assistant' && msg.kind !== 'diff' && msg.text.trim()) {
+      return index
+    }
+  }
+
+  return -1
+}
+
+const foldContinuingInterim = (
+  segments: Msg[],
+  finalText: string
+): { foldedIndex: number; segments: Msg[] } => {
+  const index = lastAssistantNarrationIndex(segments)
+
+  if (index < 0 || !textsContinue(segments[index]!.text, finalText)) {
+    return { foldedIndex: -1, segments }
+  }
+
+  const existing = segments[index]!.text
+  const nextText = finalText.trim().length >= existing.trim().length ? finalText : existing
+
+  if (existing === nextText) {
+    return { foldedIndex: index, segments }
+  }
+
+  const next = segments.slice()
+  next[index] = { ...next[index]!, text: nextText }
+
+  return { foldedIndex: index, segments: next }
+}
+
 export interface InterruptDeps {
   appendMessage: (msg: Msg) => void
   gw: { request: <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T> }
