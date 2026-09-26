@@ -16892,6 +16892,11 @@ def test_model_options_hides_unconfigured_providers_by_default(monkeypatch):
 def test_model_options_preserves_canonical_custom_row_after_agent_init(monkeypatch):
     from hermes_cli.inventory import ConfigContext
 
+    # Hosts with a real Claude Code login keep the Anthropic row via the OAuth clause; this
+    # test asserts custom-row preservation only — sandbox the shared credentials file.
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/nonexistent-claude-config-dir")
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+
     class _Agent:
         provider = "custom"
         model = "qwen3.6:35b-65k"
